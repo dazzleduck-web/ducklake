@@ -1,0 +1,80 @@
+name: Build and Publish DuckLake Extension
+
+# Builds this branch's DuckLake extension for linux_amd64/linux_arm64 via
+# DuckDB's official extension-ci-tools reusable workflow (the same
+# manylinux-style environment official extensions use, so the binary doesn't
+# link against a newer glibc than downstream runtime images ship), then
+# publishes both binaries as assets on a GitHub Release of this repo.
+#
+# Manually triggered: re-run (dispatched against whichever branch has the
+# patch you want, with a fresh release_tag) whenever the patch or
+# duckdb_version changes. Consumers (e.g. dazzleduck-sql-server) pin a
+# specific release_tag and download the assets at image-build time.
+on:
+  workflow_dispatch:
+    inputs:
+      duckdb_version:
+        description: "DuckDB version to build against"
+        required: true
+        default: "v1.5.5"
+      release_tag:
+        description: "Release tag to publish the built extension binaries under"
+        required: true
+        default: "v1.5.5-dazzleduck.1"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.5-variegata
+    with:
+      extension_name: ducklake
+      duckdb_version: ${{ inputs.duckdb_version }}
+      ci_tools_version: v1.5-variegata
+      # Matches the override ducklake's own CI currently pins (see duckdb/ducklake
+      # MainDistributionPipeline.yml); remove once extension-ci-tools' default catches up.
+      vcpkg_commit: cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3
+      # Only linux_amd64/linux_arm64 are consumed downstream.
+      exclude_archs: "osx_amd64;osx_arm64;windows_amd64;windows_amd64_mingw;wasm_mvp;wasm_eh;wasm_threads"
+      reduced_ci_mode: disabled
+
+  publish:
+    name: Publish release assets
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download built extensions
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "ducklake-*-extension-*"
+          path: artifacts
+
+      - name: Stage renamed assets
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          for dir in artifacts/*/; do
+            name=$(basename "$dir")
+            arch=${name##*-extension-}
+            cp "$dir/ducklake.duckdb_extension" "release-assets/ducklake-${arch}.duckdb_extension"
+          done
+          ls -la release-assets
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "${{ inputs.release_tag }}" --repo dazzleduck-web/ducklake >/dev/null 2>&1; then
+            gh release upload "${{ inputs.release_tag }}" release-assets/*.duckdb_extension \
+              --repo dazzleduck-web/ducklake --clobber
+          else
+            gh release create "${{ inputs.release_tag }}" release-assets/*.duckdb_extension \
+              --repo dazzleduck-web/ducklake \
+              --title "${{ inputs.release_tag }}" \
+              --notes "Patched DuckLake extension for DuckDB ${{ inputs.duckdb_version }} (backports duckdb/ducklake#1453 onto d8a1881e). Built from ${{ github.sha }} on ${{ github.ref_name }}." \
+              --target "${{ github.sha }}"
+          fi
