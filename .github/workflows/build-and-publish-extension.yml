@@ -1,6 +1,6 @@
 name: Build and Publish DuckLake Extension
 
-# Builds this branch's DuckLake extension for linux_amd64/linux_arm64 via
+# Builds this branch's DuckLake extension for linux_amd64/linux_arm64 and osx_amd64/osx_arm64 via
 # DuckDB's official extension-ci-tools reusable workflow (the same
 # manylinux-style environment official extensions use, so the binary doesn't
 # link against a newer glibc than downstream runtime images ship), then
@@ -35,8 +35,9 @@ jobs:
       # Matches the override ducklake's own CI currently pins (see duckdb/ducklake
       # MainDistributionPipeline.yml); remove once extension-ci-tools' default catches up.
       vcpkg_commit: cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3
-      # Only linux_amd64/linux_arm64 are consumed downstream.
-      exclude_archs: "osx_amd64;osx_arm64;windows_amd64;windows_amd64_mingw;wasm_mvp;wasm_eh;wasm_threads"
+      # linux_amd64/linux_arm64 go into the Docker images; osx_amd64/osx_arm64 are for running
+      # tests (e.g. dazzleduck-sql-server's CompactionStressTest) against the patch on a Mac.
+      exclude_archs: "windows_amd64;windows_amd64_mingw;wasm_mvp;wasm_eh;wasm_threads"
       reduced_ci_mode: disabled
 
   publish:
@@ -75,6 +76,6 @@ jobs:
             gh release create "${{ inputs.release_tag }}" release-assets/*.duckdb_extension \
               --repo dazzleduck-web/ducklake \
               --title "${{ inputs.release_tag }}" \
-              --notes "Patched DuckLake extension for DuckDB ${{ inputs.duckdb_version }} (backports duckdb/ducklake#1453 onto d8a1881e). Built from ${{ github.sha }} on ${{ github.ref_name }}." \
+              --notes "Patched DuckLake extension for DuckDB ${{ inputs.duckdb_version }} (backports duckdb/ducklake#1453, #1482 and #1484 onto d8a1881e). Built from ${{ github.sha }} on ${{ github.ref_name }}." \
               --target "${{ github.sha }}"
           fi
