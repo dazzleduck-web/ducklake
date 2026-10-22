@@ -452,3 +452,111 @@ FROM rowid_ranges('globbed')
 0	4	0	3
 4	6	4	9
 
+# merge_adjacent_files must keep embedded row ids: the UPDATE output file has row_id_start 20 but holds row ids 0-2,
+# so it is not adjacent to the file holding row ids 10-19
+statement ok
+CREATE TABLE ducklake.merge_updated(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.merge_updated SELECT i FROM range(10) t(i)
+
+statement ok
+INSERT INTO ducklake.merge_updated SELECT i + 10 FROM range(10) t(i)
+
+statement ok
+UPDATE ducklake.merge_updated SET i = i + 100 WHERE rowid < 3
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'merge_updated')
+
+query II
+SELECT rowid, i FROM ducklake.merge_updated WHERE rowid IN (0, 2, 15) ORDER BY rowid
+----
+0	100
+2	102
+15	15
+
+query I
+SELECT COUNT(*) FROM ducklake.merge_updated WHERE i >= 100 AND rowid <> i - 100
+----
+0
+
+# compacting a sorted table re-sorts rows across the merged files, so the merged file must keep their row ids
+statement ok
+CREATE TABLE ducklake.merge_sorted(i INTEGER);
+
+statement ok
+ALTER TABLE ducklake.merge_sorted SET SORTED BY (i DESC);
+
+statement ok
+INSERT INTO ducklake.merge_sorted SELECT i FROM range(5) t(i)
+
+statement ok
+INSERT INTO ducklake.merge_sorted SELECT i + 5 FROM range(5) t(i)
+
+statement ok
+CREATE TABLE merge_sorted_before AS SELECT rowid AS r, i FROM ducklake.merge_sorted
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'merge_sorted')
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_data_file
+WHERE end_snapshot IS NULL
+  AND table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'merge_sorted' AND end_snapshot IS NULL)
+----
+1
+
+query I
+SELECT COUNT(*) FROM merge_sorted_before b FULL OUTER JOIN (SELECT rowid AS r, i FROM ducklake.merge_sorted) a USING (r)
+WHERE b.i IS DISTINCT FROM a.i
+----
+0
+
+# a sorted flush writes row ids 0-9 out of order: the range matches row_id_start + record_count, but the row ids
+# are embedded and must be kept when merging
+statement ok
+CREATE TABLE ducklake.flush_sorted(i INTEGER);
+
+statement ok
+ALTER TABLE ducklake.flush_sorted SET SORTED BY (i DESC);
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 10, table_name => 'flush_sorted')
+
+loop x 0 10
+
+statement ok
+INSERT INTO ducklake.flush_sorted VALUES (${x})
+
+endloop
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'flush_sorted')
+
+statement ok
+INSERT INTO ducklake.flush_sorted SELECT i + 10 FROM range(20) t(i)
+
+query IIII
+FROM rowid_ranges('flush_sorted')
+----
+0	10	0	9
+10	20	10	29
+
+statement ok
+CREATE TABLE flush_sorted_before AS SELECT rowid AS r, i FROM ducklake.flush_sorted
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'flush_sorted')
+
+query I
+SELECT COUNT(*) FROM flush_sorted_before b FULL OUTER JOIN (SELECT rowid AS r, i FROM ducklake.flush_sorted) a USING (r)
+WHERE b.i IS DISTINCT FROM a.i
+----
+0
+
+query II
+SELECT rowid, i FROM ducklake.flush_sorted WHERE rowid IN (1, 8) ORDER BY rowid
+----
+1	1
+8	8

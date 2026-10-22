@@ -440,6 +440,8 @@ struct DuckLakeFileForCleanup {
 
 struct DuckLakeCompactionFileData : public DuckLakeCompactionBaseFileData {
 	optional_idx row_id_start;
+	//! Whether the file's row ids are read from an embedded row id column instead of row_id_start + file_row_number
+	bool has_embedded_row_ids = false;
 	MappingIndex mapping_id;
 	optional_idx partition_id;
 	vector<Value> partition_values;

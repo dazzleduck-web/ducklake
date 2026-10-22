@@ -2079,7 +2079,7 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 	    options.max_file_size.IsValid() ? options.max_file_size.GetIndex() : options.target_file_size;
 	string data_select_list = "data.data_file_id, data.record_count, data.row_id_start, data.begin_snapshot, "
 	                          "data.end_snapshot, data.mapping_id, sr.schema_version , data.partial_max, "
-	                          "data.partition_id, partition_info.keys, " +
+	                          "data.partition_id, partition_info.keys, row_id_stats.column_size_bytes, " +
 	                          GetFileSelectList("data");
 	string delete_select_list = "del.data_file_id AS del_data_file_id,"
 	                            "del.delete_file_id AS del_delete_file_id, "
@@ -2132,11 +2132,17 @@ LEFT JOIN (
    FROM {METADATA_CATALOG}.ducklake_file_partition_value
    GROUP BY data_file_id
 ) partition_info USING (data_file_id)
+LEFT JOIN (
+   SELECT data_file_id, column_size_bytes
+   FROM {METADATA_CATALOG}.ducklake_file_column_stats
+   WHERE table_id=%d AND column_id=%d
+) row_id_stats USING (data_file_id)
 WHERE data.table_id=%d %s%s
 ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_snapshot
 		)",
 	                                table_id.index, select_list, table_id.index, table_id.index,
-	                                deletion_threshold_clause, file_size_filter_clause);
+	                                DUCKLAKE_ROW_ID_FIELD_INDEX, table_id.index, deletion_threshold_clause,
+	                                file_size_filter_clause);
 	auto result = transaction.Query(query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get compaction file list from DuckLake: ");
@@ -2172,6 +2178,9 @@ ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_sn
 				new_entry.file.partition_values.push_back(entry);
 			}
 		}
+		col_idx++;
+		// a row id range read from an embedded row id column has a column size, a derived one has none
+		new_entry.file.has_embedded_row_ids = !row.IsNull(col_idx) && row.GetValue<idx_t>(col_idx) > 0;
 		col_idx++;
 		new_entry.file.data = ReadDataFile(table, row, col_idx, IsEncrypted());
 		if (files.empty() || files.back().file.id != new_entry.file.id) {

@@ -507,6 +507,9 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		if (!source.file.row_id_start.IsValid()) {
 			// the file does not have a row_id_start defined - it cannot be adjacent
 			files_are_adjacent = false;
+		} else if (source.file.has_embedded_row_ids) {
+			// the file's row ids are embedded (e.g. preserved by an UPDATE) and unrelated to its row_id_start
+			files_are_adjacent = false;
 		} else {
 			if (prev_row_id.IsValid() && prev_row_id.GetIndex() != source.file.row_id_start.GetIndex()) {
 				// not adjacent - we need to write row-ids to the file
@@ -549,12 +552,30 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		}
 	}
 
+	// If compaction should be ordered, add Order By (and projection) to logical plan
+	// Do not pull the sort setting at the time of the creation of the files being compacted,
+	// and instead pull the latest sort setting
+	// First, see if there are transaction local changes to the table
+	// Then fall back to latest snapshot if no local changes
+	auto latest_entry = transaction.GetTransactionLocalEntry(CatalogType::TABLE_ENTRY, table.schema.name, table.name);
+	if (!latest_entry) {
+		auto latest_snapshot = transaction.GetSnapshot();
+		latest_entry = catalog.GetEntryById(transaction, latest_snapshot, table_id);
+		if (!latest_entry) {
+			throw InternalException("DuckLakeCompactor: failed to find local table entry");
+		}
+	}
+	auto &latest_table = latest_entry->Cast<DuckLakeTableEntry>();
+
+	auto sort_data = latest_table.GetSortData();
+
 	bool write_row_id = false;
 	bool write_snapshot_id = false;
 	switch (type) {
 	case CompactionType::MERGE_ADJACENT_TABLES: {
-		// if files are adjacent, we don't need to write the row-id to the file
-		write_row_id = !files_are_adjacent;
+		// if files are adjacent, we don't need to write the row-id to the file - unless the output is re-sorted, which
+		// moves rows away from the positions their row ids are derived from
+		write_row_id = !files_are_adjacent || sort_data;
 		write_snapshot_id = true;
 		break;
 	}
@@ -608,22 +629,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		root = DuckLakeInsert::InsertCasts(binder, root);
 	}
 
-	// If compaction should be ordered, add Order By (and projection) to logical plan
-	// Do not pull the sort setting at the time of the creation of the files being compacted,
-	// and instead pull the latest sort setting
-	// First, see if there are transaction local changes to the table
-	// Then fall back to latest snapshot if no local changes
-	auto latest_entry = transaction.GetTransactionLocalEntry(CatalogType::TABLE_ENTRY, table.schema.name, table.name);
-	if (!latest_entry) {
-		auto latest_snapshot = transaction.GetSnapshot();
-		latest_entry = catalog.GetEntryById(transaction, latest_snapshot, table_id);
-		if (!latest_entry) {
-			throw InternalException("DuckLakeCompactor: failed to find local table entry");
-		}
-	}
-	auto &latest_table = latest_entry->Cast<DuckLakeTableEntry>();
-
-	auto sort_data = latest_table.GetSortData();
+	// if the table is sorted, write the compacted file in sort order
 	if (sort_data) {
 		root = DuckLakeCompactor::InsertSort(binder, root, latest_table, sort_data);
 	}
