@@ -33,7 +33,7 @@ SELECT stats(col) FROM fully_shredded_primitive LIMIT 1;
 # # check the stats
 # the file statistics do not show NULL variants, so the counts are unknown
 query II
-SELECT value_count, null_count FROM dl.ducklake_file_column_stats
+SELECT value_count, null_count FROM dl.ducklake_file_column_stats WHERE column_id <> 2147483540
 ----
 NULL	NULL
 

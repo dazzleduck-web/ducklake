@@ -1,0 +1,454 @@
+# name: test/sql/rowid/rowid_stats_pruning.test
+# description: per-file row id ranges are stored as column stats and used to prune files on rowid predicates
+# group: [rowid]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_rowid_stats_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+# row id range of every live data file of a table, from the stats row with column_id = ROW_ID_FIELD_ID
+statement ok
+CREATE MACRO rowid_ranges(tbl) AS TABLE
+SELECT data.row_id_start, data.record_count, stats.min_value::BIGINT AS min_rowid, stats.max_value::BIGINT AS max_rowid
+FROM ducklake_meta.ducklake_data_file data
+LEFT JOIN ducklake_meta.ducklake_file_column_stats stats
+       ON stats.data_file_id = data.data_file_id AND stats.column_id = 2147483540
+WHERE data.end_snapshot IS NULL
+  AND data.table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = tbl AND end_snapshot IS NULL)
+ORDER BY min_rowid, data.row_id_start
+
+statement ok
+CREATE TABLE ducklake.test(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.test SELECT i FROM range(100) t(i)
+
+statement ok
+INSERT INTO ducklake.test SELECT i + 100 FROM range(100) t(i)
+
+statement ok
+INSERT INTO ducklake.test SELECT i + 200 FROM range(100) t(i)
+
+# plain inserts: [row_id_start, row_id_start + record_count - 1]
+query IIII
+FROM rowid_ranges('test')
+----
+0	100	0	99
+100	100	100	199
+200	100	200	299
+
+# the row id range is not a table column stat
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_table_column_stats WHERE column_id = 2147483540
+----
+0
+
+# rows of this table have i = rowid
+query I
+SELECT COUNT(*) FROM ducklake.test WHERE i <> rowid
+----
+0
+
+# =, <, <=, >, >=, BETWEEN, IN
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.test WHERE rowid = 150
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+query I
+SELECT i FROM ducklake.test WHERE rowid = 150
+----
+150
+
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.test WHERE rowid < 100
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.test WHERE rowid <= 100
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.test WHERE rowid > 199
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.test WHERE rowid >= 199
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.test WHERE rowid BETWEEN 120 AND 180
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+query I
+SELECT COUNT(*) FROM ducklake.test WHERE rowid BETWEEN 120 AND 180
+----
+61
+
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.test WHERE rowid IN (5, 250)
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+
+query I
+SELECT i FROM ducklake.test WHERE rowid IN (5, 250, 1000) ORDER BY i
+----
+5
+250
+
+# no file has a single row id, so <> prunes nothing - but must stay correct
+query I
+SELECT COUNT(*) FROM ducklake.test WHERE rowid <> 150
+----
+299
+
+query I
+SELECT COUNT(*) FROM ducklake.test WHERE rowid > 1000
+----
+0
+
+# combined with a filter on a regular column
+query I
+SELECT i FROM ducklake.test WHERE rowid >= 200 AND i % 50 = 0 ORDER BY i
+----
+200
+250
+
+# join predicate: the hash join pushes the build side's range into the scan at runtime
+statement ok
+CREATE TABLE lookup_keys AS SELECT 150::BIGINT AS k
+
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.test JOIN lookup_keys ON ducklake.test.rowid = lookup_keys.k
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+query I
+SELECT i FROM ducklake.test JOIN lookup_keys ON ducklake.test.rowid = lookup_keys.k
+----
+150
+
+statement ok
+CREATE TABLE lookup_keys_multi AS SELECT * FROM (VALUES (3::BIGINT), (7::BIGINT), (299::BIGINT)) t(k)
+
+query I
+SELECT i FROM ducklake.test JOIN lookup_keys_multi ON ducklake.test.rowid = lookup_keys_multi.k ORDER BY i
+----
+3
+7
+299
+
+# Top-N on rowid
+query I
+SELECT i FROM ducklake.test ORDER BY rowid DESC LIMIT 2
+----
+299
+298
+
+# time travel uses the ranges of the files visible at that snapshot
+query I
+SELECT COUNT(*) FROM ducklake.test AT (VERSION => 2) WHERE rowid >= 100
+----
+0
+
+# transaction-local files are not pruned through the catalog
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.test VALUES (1000)
+
+query I
+SELECT COUNT(*) FROM ducklake.test WHERE rowid >= 1000000000000000000
+----
+1
+
+statement ok
+ROLLBACK
+
+# files written before row id stats existed have no stats row - they must never be pruned
+statement ok
+CREATE TABLE ducklake.legacy(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.legacy SELECT i FROM range(10) t(i)
+
+statement ok
+INSERT INTO ducklake.legacy SELECT i + 10 FROM range(10) t(i)
+
+statement ok
+DELETE FROM ducklake_meta.ducklake_file_column_stats
+WHERE column_id = 2147483540
+  AND table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'legacy' AND end_snapshot IS NULL)
+
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.legacy WHERE rowid = 15
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+
+query I
+SELECT i FROM ducklake.legacy WHERE rowid = 15
+----
+15
+
+# MERGE ... UPDATE preserves row ids: the rewritten file's ids are unrelated to its row_id_start
+statement ok
+CREATE TABLE ducklake.merged(i INTEGER, j INTEGER);
+
+statement ok
+INSERT INTO ducklake.merged VALUES (1, 5), (2, 5);
+
+statement ok
+MERGE INTO ducklake.merged USING (SELECT 1 AS i, 5 AS j) u ON ducklake.merged.j = u.j WHEN MATCHED THEN UPDATE;
+
+query I
+SELECT rowid FROM ducklake.merged ORDER BY rowid
+----
+0
+1
+
+query IIII
+FROM rowid_ranges('merged')
+----
+2	2	0	1
+
+query II
+SELECT rowid, i FROM ducklake.merged WHERE rowid = 0
+----
+0	1
+
+# UPDATE: the new file carries the preserved row ids of the updated rows
+statement ok
+CREATE TABLE ducklake.updated(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.updated SELECT i FROM range(10) t(i)
+
+statement ok
+UPDATE ducklake.updated SET i = i + 100 WHERE rowid IN (3, 4)
+
+query IIII
+FROM rowid_ranges('updated')
+----
+0	10	0	9
+10	2	3	4
+
+query II
+SELECT rowid, i FROM ducklake.updated WHERE rowid IN (3, 4) ORDER BY rowid
+----
+3	103
+4	104
+
+# flushed inlined data keeps its original row ids
+statement ok
+CREATE TABLE ducklake.flushed(i INTEGER);
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 10, table_name => 'flushed')
+
+statement ok
+INSERT INTO ducklake.flushed SELECT i FROM range(5) t(i)
+
+statement ok
+INSERT INTO ducklake.flushed SELECT i + 5 FROM range(5) t(i)
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'flushed')
+
+query IIII
+FROM rowid_ranges('flushed')
+----
+0	10	0	9
+
+query I
+SELECT i FROM ducklake.flushed WHERE rowid = 7
+----
+7
+
+# merge_adjacent_files over adjacent files
+statement ok
+CREATE TABLE ducklake.compacted(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.compacted SELECT i FROM range(10) t(i)
+
+statement ok
+INSERT INTO ducklake.compacted SELECT i + 10 FROM range(10) t(i)
+
+statement ok
+INSERT INTO ducklake.compacted SELECT i + 20 FROM range(10) t(i)
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'compacted')
+
+query IIII
+FROM rowid_ranges('compacted')
+----
+0	30	0	29
+
+query I
+SELECT i FROM ducklake.compacted WHERE rowid = 25
+----
+25
+
+# rewrite_data_files embeds the row ids and leaves row_id_start unset
+statement ok
+CREATE TABLE ducklake.rewritten(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.rewritten SELECT i FROM range(20) t(i)
+
+statement ok
+DELETE FROM ducklake.rewritten WHERE i < 15
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'rewritten', delete_threshold => 0)
+
+query IIII
+FROM rowid_ranges('rewritten')
+----
+NULL	5	15	19
+
+query I
+SELECT i FROM ducklake.rewritten WHERE rowid = 17
+----
+17
+
+query I
+SELECT COUNT(*) FROM ducklake.rewritten WHERE rowid < 15
+----
+0
+
+# ducklake_add_data_files assigns row ids like an insert
+statement ok
+COPY (SELECT (i + 3)::INTEGER AS i FROM range(7) t(i)) TO '${DATA_PATH}/ducklake_rowid_stats_added.parquet'
+
+statement ok
+CREATE TABLE ducklake.added(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.added SELECT i FROM range(3) t(i)
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'added', '${DATA_PATH}/ducklake_rowid_stats_added.parquet')
+
+query IIII
+FROM rowid_ranges('added')
+----
+0	3	0	2
+3	7	3	9
+
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.added WHERE rowid = 8
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+query I
+SELECT i FROM ducklake.added WHERE rowid = 8
+----
+8
+
+# inlining on: small inserts are inlined, a large one goes straight to a file
+statement ok
+CREATE TABLE ducklake.mixed(i INTEGER);
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 10, table_name => 'mixed')
+
+statement ok
+INSERT INTO ducklake.mixed SELECT i FROM range(5) t(i)
+
+statement ok
+INSERT INTO ducklake.mixed SELECT i + 5 FROM range(100) t(i)
+
+statement ok
+INSERT INTO ducklake.mixed SELECT i + 105 FROM range(4) t(i)
+
+query IIII
+FROM rowid_ranges('mixed')
+----
+5	100	5	104
+
+# inlined rows are always scanned, the file is pruned by its range
+query I
+SELECT i FROM ducklake.mixed WHERE rowid IN (2, 50, 106) ORDER BY i
+----
+2
+50
+106
+
+# the flushed file holds row ids 0-4 and 105-108: its range is the embedded one, not row_id_start + record_count
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'mixed')
+
+query IIII
+FROM rowid_ranges('mixed')
+----
+0	9	0	108
+5	100	5	104
+
+query I
+SELECT i FROM ducklake.mixed WHERE rowid IN (2, 50, 106) ORDER BY i
+----
+2
+50
+106
+
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.mixed WHERE rowid = 107
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# a partitioned insert writes one file per partition, each with its own range
+statement ok
+CREATE TABLE ducklake.partitioned(i INTEGER, p INTEGER);
+
+statement ok
+ALTER TABLE ducklake.partitioned SET PARTITIONED BY (p);
+
+statement ok
+INSERT INTO ducklake.partitioned SELECT i, i % 3 FROM range(30) t(i)
+
+query IIII
+FROM rowid_ranges('partitioned')
+----
+0	10	0	9
+10	10	10	19
+20	10	20	29
+
+query I
+SELECT COUNT(*) FROM ducklake.partitioned WHERE rowid IN (0, 1, 2, 29)
+----
+4
+
+# ducklake_add_data_files with a glob adds several files in one call
+statement ok
+COPY (SELECT i::INTEGER AS i FROM range(4) t(i)) TO '${DATA_PATH}/ducklake_rowid_stats_glob_1.parquet'
+
+statement ok
+COPY (SELECT i::INTEGER AS i FROM range(6) t(i)) TO '${DATA_PATH}/ducklake_rowid_stats_glob_2.parquet'
+
+statement ok
+CREATE TABLE ducklake.globbed(i INTEGER);
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'globbed', '${DATA_PATH}/ducklake_rowid_stats_glob_*.parquet')
+
+query IIII
+FROM rowid_ranges('globbed')
+----
+0	4	0	3
+4	6	4	9
+

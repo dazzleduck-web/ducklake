@@ -65,7 +65,7 @@ query III
 SELECT column_id, value_count, null_count 
 FROM metadata.ducklake_file_column_stats s
 JOIN metadata.ducklake_data_file f ON s.data_file_id = f.data_file_id
-WHERE f.path LIKE '%simple_test%'
+WHERE f.path LIKE '%simple_test%' AND s.column_id <> 2147483540
 ORDER BY column_id
 ----
 1	3	2

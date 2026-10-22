@@ -171,6 +171,16 @@ unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::GetExpressionFilterNode(Mu
 
 void DuckLakeMultiFileList::AddFilterToPushdownInfo(FilterPushdownInfo &pushdown_info, column_t column_id,
                                                     unique_ptr<TableFilter> filter) const {
+	if (column_id == COLUMN_IDENTIFIER_ROW_ID) {
+		// prune on the per-file row id range, stored as stats of the row id field
+		auto expr_filter = ExpressionFilter::FromTableFilter(*filter, LogicalType::BIGINT);
+		if (expr_filter->expr) {
+			DuckLakeFilterNode node(
+			    ColumnFilterInfo(DUCKLAKE_ROW_ID_FIELD_INDEX, LogicalType::BIGINT, std::move(expr_filter)));
+			AddFilterNodeToPushdownInfo(pushdown_info, node);
+		}
+		return;
+	}
 	auto node = GetFilterNode(column_id, std::move(filter));
 	if (node) {
 		AddFilterNodeToPushdownInfo(pushdown_info, *node);
