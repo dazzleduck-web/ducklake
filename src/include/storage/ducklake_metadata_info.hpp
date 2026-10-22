@@ -447,6 +447,26 @@ struct DuckLakeCompactionFileData : public DuckLakeCompactionBaseFileData {
 	vector<Value> partition_values;
 };
 
+//! A data file written before row id stats were collected
+struct DuckLakeRowIdStatsBackfillFile {
+	DataFileIndex id;
+	DuckLakeFileData data;
+	optional_idx row_id_start;
+	idx_t row_count = 0;
+};
+
+//! The row id stats row to insert for such a file
+struct DuckLakeRowIdStatsBackfillEntry {
+	DataFileIndex id;
+	idx_t column_size_bytes = 0;
+	//! Unset when the counts are unknown
+	optional_idx value_count;
+	optional_idx null_count;
+	//! Unset when the bounds are unknown - such a file is never pruned
+	optional_idx min_row_id;
+	optional_idx max_row_id;
+};
+
 struct DuckLakeCompactionDeleteFileData : public DuckLakeCompactionBaseFileData {
 	DataFileIndex delete_file_id;
 	optional_idx max_snapshot;

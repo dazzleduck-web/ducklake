@@ -60,6 +60,8 @@
     {
       "reason": "Test issues UPDATE against the metadata catalog directly",
       "paths": [
+        "test/sql/rowid/backfill_row_id_stats.test",
+        "test/sql/rowid/backfill_row_id_stats_encrypted.test",
         "test/sql/delete/delete_legacy_missing_mapping_after_rename_add_files.test"
       ]
     },
@@ -156,6 +158,7 @@
     {
       "reason": "FIXME: Not implemented Error: Multiple streaming scans or streaming scans + CTAS / insert in the same query are not currently supported",
       "paths": [
+        "test/sql/rowid/rowid_stats_metadata.test",
         "test/sql/add_files/add_files_hive_many_columns.test",
         "test/sql/add_files/add_files_hive_partition_cast.test",
         "test/sql/add_files/add_files_nested_list_struct_nulls.test",

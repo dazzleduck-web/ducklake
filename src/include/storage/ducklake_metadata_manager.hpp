@@ -225,6 +225,10 @@ public:
 	                                                          const string &separator);
 
 	virtual void RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &cleaned_up_files);
+	//! Data files of a table that have no row id stats row
+	virtual vector<DuckLakeRowIdStatsBackfillFile> GetFilesWithoutRowIdStats(DuckLakeTableEntry &table);
+	//! Insert row id stats rows, skipping files that were removed or got a row id stats row in the meantime
+	virtual void InsertRowIdStats(TableIndex table_id, const vector<DuckLakeRowIdStatsBackfillEntry> &entries);
 	static string DropSchemas(const set<SchemaIndex> &ids);
 	static string DropTables(const set<TableIndex> &ids, bool renamed);
 	static string DropViews(const set<TableIndex> &ids, bool renamed);

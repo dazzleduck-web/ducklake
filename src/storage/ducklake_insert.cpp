@@ -155,7 +155,8 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 				}
 				// row ids read from this file are the embedded ones, unrelated to the row_id_start assigned at commit.
 				// Record the entry even without bounds: NULL bounds are never pruned, and the entry stops a range from
-				// being derived from row_id_start
+				// being derived from row_id_start. A non-zero column size marks it as embedded
+				row_id_stats.column_size_bytes = MaxValue<idx_t>(row_id_stats.column_size_bytes, 1);
 				data_file.column_stats.insert(make_pair(FieldIndex(DUCKLAKE_ROW_ID_FIELD_INDEX), std::move(row_id_stats)));
 				continue;
 			}

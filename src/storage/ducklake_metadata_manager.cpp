@@ -1614,10 +1614,16 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 		auto &dfc = dynamic_filter_columns[i];
 		auto alias = StringUtil::Format("stats_%d", NumericCast<int64_t>(i));
 		stats_select_list += StringUtil::Format(", %s.min_value, %s.max_value", alias.c_str(), alias.c_str());
+		// concurrent row id stats backfills can each insert the same (identical) row - join a single one per file
+		string stats_source = IsRowIdStatsField(FieldIndex(dfc.column_field_index))
+		                          ? "(SELECT DISTINCT data_file_id, table_id, column_id, min_value, max_value FROM "
+		                            "{METADATA_CATALOG}.ducklake_file_column_stats)"
+		                          : "{METADATA_CATALOG}.ducklake_file_column_stats";
 		stats_join_list += StringUtil::Format(
-		    "\nLEFT JOIN {METADATA_CATALOG}.ducklake_file_column_stats %s ON %s.data_file_id = data.data_file_id AND "
+		    "\nLEFT JOIN %s %s ON %s.data_file_id = data.data_file_id AND "
 		    "%s.table_id = data.table_id AND %s.column_id = %d",
-		    alias.c_str(), alias.c_str(), alias.c_str(), alias.c_str(), NumericCast<int64_t>(dfc.column_field_index));
+		    stats_source, alias.c_str(), alias.c_str(), alias.c_str(), alias.c_str(),
+		    NumericCast<int64_t>(dfc.column_field_index));
 
 		// Generate ORDER BY clause to optimize Top-N queries - order files by their min/max stats
 		// so we find satisfying rows early and can skip remaining files via dynamic filter pruning.
@@ -2133,9 +2139,10 @@ LEFT JOIN (
    GROUP BY data_file_id
 ) partition_info USING (data_file_id)
 LEFT JOIN (
-   SELECT data_file_id, column_size_bytes
+   SELECT data_file_id, MAX(column_size_bytes) AS column_size_bytes
    FROM {METADATA_CATALOG}.ducklake_file_column_stats
    WHERE table_id=%d AND column_id=%d
+   GROUP BY data_file_id
 ) row_id_stats USING (data_file_id)
 WHERE data.table_id=%d %s%s
 ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_snapshot
@@ -4687,6 +4694,70 @@ WHERE data_file_id IN (%s);
 	                                                   deleted_file_ids));
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to delete scheduled cleanup files in DuckLake: ");
+	}
+}
+
+vector<DuckLakeRowIdStatsBackfillFile> DuckLakeMetadataManager::GetFilesWithoutRowIdStats(DuckLakeTableEntry &table) {
+	auto table_id = table.GetTableId();
+	auto result = transaction.Query(StringUtil::Format(R"(
+SELECT data.data_file_id, data.row_id_start, data.record_count, %s
+FROM {METADATA_CATALOG}.ducklake_data_file data
+WHERE data.table_id = %d AND NOT EXISTS (
+    SELECT 1 FROM {METADATA_CATALOG}.ducklake_file_column_stats stats
+    WHERE stats.data_file_id = data.data_file_id AND stats.column_id = %d)
+ORDER BY data.data_file_id;
+)",
+	                                                   GetFileSelectList("data"), table_id.index,
+	                                                   DUCKLAKE_ROW_ID_FIELD_INDEX));
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to get files without row id stats from DuckLake: ");
+	}
+	vector<DuckLakeRowIdStatsBackfillFile> files;
+	for (auto &row : *result) {
+		DuckLakeRowIdStatsBackfillFile file;
+		idx_t col_idx = 0;
+		file.id = DataFileIndex(row.GetValue<idx_t>(col_idx++));
+		if (!row.IsNull(col_idx)) {
+			file.row_id_start = row.GetValue<idx_t>(col_idx);
+		}
+		col_idx++;
+		file.row_count = row.GetValue<idx_t>(col_idx++);
+		file.data = ReadDataFile(table, row, col_idx, IsEncrypted());
+		files.push_back(std::move(file));
+	}
+	return files;
+}
+
+void DuckLakeMetadataManager::InsertRowIdStats(TableIndex table_id,
+                                               const vector<DuckLakeRowIdStatsBackfillEntry> &entries) {
+	if (entries.empty()) {
+		return;
+	}
+	string values;
+	for (auto &entry : entries) {
+		if (!values.empty()) {
+			values += ", ";
+		}
+		values += StringUtil::Format(
+		    "(%d, %d, %d, %d, %s::BIGINT, %s::BIGINT, %s::VARCHAR, %s::VARCHAR, NULL::BOOLEAN, NULL::VARCHAR)",
+		    entry.id.index, table_id.index, DUCKLAKE_ROW_ID_FIELD_INDEX, entry.column_size_bytes,
+		    DuckLakeUtil::OptionalIdxOrNull(entry.value_count), DuckLakeUtil::OptionalIdxOrNull(entry.null_count),
+		    entry.min_row_id.IsValid() ? "'" + to_string(entry.min_row_id.GetIndex()) + "'" : string("NULL"),
+		    entry.max_row_id.IsValid() ? "'" + to_string(entry.max_row_id.GetIndex()) + "'" : string("NULL"));
+	}
+	auto result = transaction.Query(StringUtil::Format(R"(
+INSERT INTO {METADATA_CATALOG}.ducklake_file_column_stats
+SELECT new_stats.*
+FROM (VALUES %s) new_stats(data_file_id, table_id, column_id, column_size_bytes, value_count, null_count, min_value,
+                           max_value, contains_nan, extra_stats)
+WHERE EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_data_file data
+              WHERE data.data_file_id = new_stats.data_file_id)
+  AND NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_file_column_stats stats
+                  WHERE stats.data_file_id = new_stats.data_file_id AND stats.column_id = new_stats.column_id);
+)",
+	                                                   values));
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to insert row id stats into DuckLake: ");
 	}
 }
 
