@@ -33,7 +33,7 @@ shredding_state: SHREDDED, shredding: {typed_value_type: INTEGER, stats: {fully_
 # # check the stats
 # two non-null values
 query II
-SELECT value_count, null_count FROM dl.ducklake_file_column_stats
+SELECT value_count, null_count FROM dl.ducklake_file_column_stats WHERE column_id <> 2147483540
 ----
 2	0
 

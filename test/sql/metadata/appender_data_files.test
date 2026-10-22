@@ -39,7 +39,7 @@ SELECT * FROM ducklake.basic_test ORDER BY id
 # Verify column stats were recorded
 query I
 SELECT COUNT(*) FROM dl.ducklake_file_column_stats 
-WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'basic_test')
+WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'basic_test') AND column_id <> 2147483540
 ----
 2
 
@@ -75,7 +75,7 @@ INSERT INTO ducklake.stats_test SELECT i, printf('%06d', i) FROM range(1000) t(i
 # Check column stats contain min/max
 query IIII
 SELECT column_id, min_value, max_value, value_count FROM dl.ducklake_file_column_stats
-WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'stats_test')
+WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'stats_test') AND column_id <> 2147483540
 ORDER BY column_id
 ----
 1	0	999	1000
@@ -112,7 +112,7 @@ SELECT * FROM ducklake.null_test ORDER BY id
 # Check null counts are recorded
 query II
 SELECT column_id, null_count FROM dl.ducklake_file_column_stats 
-WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'null_test')
+WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'null_test') AND column_id <> 2147483540
 ORDER BY column_id
 ----
 1	0
@@ -142,7 +142,7 @@ SELECT COUNT(*) FROM dl.ducklake_data_file WHERE table_id = (SELECT table_id FRO
 
 # Verify each file has column stats
 query I
-SELECT COUNT(*) FROM dl.ducklake_file_column_stats WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'pruning_test')
+SELECT COUNT(*) FROM dl.ducklake_file_column_stats WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'pruning_test') AND column_id <> 2147483540
 ----
 6
 

@@ -148,13 +148,15 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 				continue;
 			}
 			if (column_names[0] == "_ducklake_internal_row_id") {
-				if (set_snapshot_id) {
+				auto row_id_stats = ParseColumnStats(LogicalType::BIGINT, col_stats);
+				if (set_snapshot_id && row_id_stats.has_min) {
 					// extract the min row_id so flushed files preserve the original row_id_start
-					auto row_id_stats = ParseColumnStats(LogicalType::BIGINT, col_stats);
-					if (row_id_stats.has_min) {
-						data_file.flush_row_id_start = StringUtil::ToUnsigned(row_id_stats.min);
-					}
+					data_file.flush_row_id_start = StringUtil::ToUnsigned(row_id_stats.min);
 				}
+				// row ids read from this file are the embedded ones, unrelated to the row_id_start assigned at commit.
+				// Record the entry even without bounds: NULL bounds are never pruned, and the entry stops a range from
+				// being derived from row_id_start
+				data_file.column_stats.insert(make_pair(FieldIndex(DUCKLAKE_ROW_ID_FIELD_INDEX), std::move(row_id_stats)));
 				continue;
 			}
 

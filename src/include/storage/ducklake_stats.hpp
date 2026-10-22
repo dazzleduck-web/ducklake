@@ -9,10 +9,20 @@
 #pragma once
 
 #include "storage/ducklake_extra_stats.hpp"
+#include "duckdb/common/multi_file/multi_file_reader.hpp"
 
 namespace duckdb {
 class BaseStatistics;
 struct DuckLakeDataFile;
+
+//! The per-file row id range is stored as column stats under the reserved row id field id, the field id that
+//! `_ducklake_internal_row_id` is written with. A range read from that embedded column has a column_size_bytes > 0,
+//! a range derived from row_id_start has column_size_bytes = 0
+static constexpr idx_t DUCKLAKE_ROW_ID_FIELD_INDEX = MultiFileReader::ROW_ID_FIELD_ID;
+
+inline bool IsRowIdStatsField(FieldIndex field_index) {
+	return field_index.index == DUCKLAKE_ROW_ID_FIELD_INDEX;
+}
 
 //! Returns true for types that require value-based (not lexicographic string) comparison for min/max stats
 inline bool RequiresValueComparison(const LogicalType &type) {
@@ -60,6 +70,8 @@ public:
 	static DuckLakeColumnStats FromGlobalStats(const LogicalType &type, const DuckLakeGlobalColumnStatsInfo &col,
 	                                           bool table_has_rows);
 	static bool BoundsSurviveTypePromotion(const LogicalType &source, const LogicalType &target);
+	//! Row id stats of a file without an embedded row id column: [row_id_start, row_id_start + row_count - 1]
+	static DuckLakeColumnStats RowIdRangeStats(idx_t row_id_start, idx_t row_count);
 	unique_ptr<BaseStatistics> ToStats() const;
 	void MergeStats(const DuckLakeColumnStats &new_stats);
 

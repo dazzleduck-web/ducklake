@@ -28,7 +28,7 @@ POINT (1 2)
 
 # Inspect file stats
 query I
-select extra_stats from ducklake_meta.ducklake_file_column_stats;
+select extra_stats from ducklake_meta.ducklake_file_column_stats WHERE column_id <> 2147483540;
 ----
 {"bbox": {"xmin": 1.000000, "xmax": 1.000000, "ymin": 2.000000, "ymax": 2.000000, "zmin": null, "zmax": null, "mmin": null, "mmax": null}, "types": ["point"]}
 
@@ -48,7 +48,7 @@ LINESTRING Z (5 5 5, 10 10 10)
 
 # Inspect file stats - should be separate for each file
 query I
-select extra_stats from ducklake_meta.ducklake_file_column_stats order by all;
+select extra_stats from ducklake_meta.ducklake_file_column_stats WHERE column_id <> 2147483540 order by all;
 ----
 {"bbox": {"xmin": 1.000000, "xmax": 1.000000, "ymin": 2.000000, "ymax": 2.000000, "zmin": null, "zmax": null, "mmin": null, "mmax": null}, "types": ["point"]}
 {"bbox": {"xmin": 5.000000, "xmax": 10.000000, "ymin": 5.000000, "ymax": 10.000000, "zmin": 5.000000, "zmax": 10.000000, "mmin": null, "mmax": null}, "types": ["linestring_z"]}
@@ -66,7 +66,7 @@ SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_f
 t1	2	1
 
 query I
-select extra_stats from ducklake_meta.ducklake_file_column_stats order by all;
+select extra_stats from ducklake_meta.ducklake_file_column_stats WHERE column_id <> 2147483540 order by all;
 ----
 {"bbox": {"xmin": 1.000000, "xmax": 10.000000, "ymin": 2.000000, "ymax": 10.000000, "zmin": 5.000000, "zmax": 10.000000, "mmin": null, "mmax": null}, "types": ["linestring_z", "point"]}
 
@@ -88,7 +88,7 @@ LINESTRING Z (5 5 5, 10 10 10)
 
 # Check stats
 query I
-select extra_stats from ducklake_meta.ducklake_file_column_stats order by all;
+select extra_stats from ducklake_meta.ducklake_file_column_stats WHERE column_id <> 2147483540 order by all;
 ----
 {"bbox": {"xmin": -30.000000, "xmax": -30.000000, "ymin": -30.000000, "ymax": -30.000000, "zmin": -30.000000, "zmax": -30.000000, "mmin": -30.000000, "mmax": -30.000000}, "types": ["point_zm"]}
 {"bbox": {"xmin": 1.000000, "xmax": 10.000000, "ymin": 2.000000, "ymax": 10.000000, "zmin": 5.000000, "zmax": 10.000000, "mmin": null, "mmax": null}, "types": ["linestring_z", "point"]}
@@ -102,6 +102,6 @@ t1	3	1
 
 # Check merged stats
 query I
-select extra_stats from ducklake_meta.ducklake_file_column_stats order by all;
+select extra_stats from ducklake_meta.ducklake_file_column_stats WHERE column_id <> 2147483540 order by all;
 ----
 {"bbox": {"xmin": -30.000000, "xmax": 20.000000, "ymin": -30.000000, "ymax": 20.000000, "zmin": -30.000000, "zmax": 10.000000, "mmin": -30.000000, "mmax": 5.000000}, "types": ["linestring_z", "point", "point_m", "point_zm"]}

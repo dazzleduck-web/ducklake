@@ -242,6 +242,10 @@ void DuckLakeServerSideCommit::ReadStagedDataFiles() {
 		for (auto &row : *stats_result) {
 			DataFileIndex local_file_id(AsIdx(row, 0));
 			ColumnKey key {TableIndex(AsIdx(row, 1)), FieldIndex(AsIdx(row, 2))};
+			if (IsRowIdStatsField(key.column_id)) {
+				per_file_stats[local_file_id].emplace(key.column_id, ReadColumnStatsRow(row, 3, LogicalType::BIGINT));
+				continue;
+			}
 			auto type_it = column_types.find(key);
 			if (type_it == column_types.end()) {
 				continue;

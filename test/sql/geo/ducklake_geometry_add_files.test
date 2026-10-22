@@ -44,6 +44,6 @@ select * from t1;
 POINT (5 5)
 
 query I
-select extra_stats from ducklake_meta.ducklake_file_column_stats order by all;
+select extra_stats from ducklake_meta.ducklake_file_column_stats WHERE column_id <> 2147483540 order by all;
 ----
 {"bbox": {"xmin": 5.000000, "xmax": 5.000000, "ymin": 5.000000, "ymax": 5.000000, "zmin": null, "zmax": null, "mmin": null, "mmax": null}, "types": ["point"]}

@@ -112,6 +112,20 @@ bool DuckLakeColumnStats::BoundsSurviveTypePromotion(const LogicalType &source, 
 	return source.id() == LogicalTypeId::DECIMAL && target.id() == LogicalTypeId::DECIMAL;
 }
 
+DuckLakeColumnStats DuckLakeColumnStats::RowIdRangeStats(idx_t row_id_start, idx_t row_count) {
+	D_ASSERT(row_count > 0);
+	DuckLakeColumnStats stats(LogicalType::BIGINT);
+	stats.has_min = true;
+	stats.min = to_string(row_id_start);
+	stats.has_max = true;
+	stats.max = to_string(row_id_start + row_count - 1);
+	stats.has_null_count = true;
+	stats.null_count = 0;
+	stats.has_num_values = true;
+	stats.num_values = row_count;
+	return stats;
+}
+
 void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 	bool types_differ = type != new_stats.type;
 	bool bounds_survive = !types_differ || BoundsSurviveTypePromotion(type, new_stats.type);
@@ -213,6 +227,10 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 }
 
 void DuckLakeTableStats::MergeStats(FieldIndex col_id, const DuckLakeColumnStats &file_stats) {
+	if (IsRowIdStatsField(col_id)) {
+		// row id ranges are only used to prune files, they are not table column stats
+		return;
+	}
 	auto entry = column_stats.find(col_id);
 	if (entry == column_stats.end()) {
 		column_stats.insert(make_pair(col_id, file_stats));

@@ -1252,6 +1252,13 @@ DuckLakeFileInfo DuckLakeTransaction::BuildDataFileInfo(const DuckLakeDataFile &
 	data_file.begin_snapshot = file.begin_snapshot;
 	data_file.max_partial_file_snapshot = file.max_partial_file_snapshot;
 	data_file.column_stats = file.column_stats;
+	auto row_id_field = FieldIndex(DUCKLAKE_ROW_ID_FIELD_INDEX);
+	if (row_id_start.IsValid() && file.row_count > 0 &&
+	    data_file.column_stats.find(row_id_field) == data_file.column_stats.end()) {
+		// no embedded row ids - the file's row ids are row_id_start + file_row_number
+		data_file.column_stats.insert(
+		    make_pair(row_id_field, DuckLakeColumnStats::RowIdRangeStats(row_id_start.GetIndex(), file.row_count)));
+	}
 	for (auto &partition_entry : file.partition_values) {
 		DuckLakeFilePartitionInfo partition_info;
 		partition_info.partition_column_idx = partition_entry.partition_column_idx;

@@ -42,6 +42,12 @@ DuckLakeMultiFileList::DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info,
 
 void DuckLakeMultiFileList::AddFilterToPushdownInfo(FilterPushdownInfo &pushdown_info, column_t column_id,
                                                     unique_ptr<TableFilter> filter) const {
+	if (column_id == COLUMN_IDENTIFIER_ROW_ID) {
+		// prune on the per-file row id range, stored as stats of the row id field
+		ColumnFilterInfo filter_info_entry(DUCKLAKE_ROW_ID_FIELD_INDEX, LogicalType::BIGINT, std::move(filter));
+		pushdown_info.column_filters.emplace(DUCKLAKE_ROW_ID_FIELD_INDEX, std::move(filter_info_entry));
+		return;
+	}
 	if (IsVirtualColumn(column_id)) {
 		return;
 	}
