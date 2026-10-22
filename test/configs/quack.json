@@ -89,7 +89,9 @@
         "test/sql/rewrite_data_files/test_rewrite_many_non_candidate_files.test",
         "test/sql/stats/nan_column_stats_missing_max.test",
         "test/sql/stats/nan_column_stats_missing_min.test",
-        "test/sql/stats/numeric_stats_one_bound.test"
+        "test/sql/stats/numeric_stats_one_bound.test",
+        "test/sql/rowid/backfill_row_id_stats.test",
+        "test/sql/rowid/backfill_row_id_stats_encrypted.test"
       ]
     },
     {
@@ -194,7 +196,8 @@
     {
       "reason": "FIXME: Not implemented Error: Multiple streaming scans or streaming scans + CTAS / insert in the same query are not currently supported",
       "paths": [
-        "test/sql/sorted_table/set_sorted_by_idempotent.test"
+        "test/sql/sorted_table/set_sorted_by_idempotent.test",
+        "test/sql/rowid/rowid_stats_metadata.test"
       ]
     },
     {

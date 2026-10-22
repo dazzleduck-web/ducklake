@@ -1,0 +1,289 @@
+# name: test/sql/rowid/backfill_row_id_stats.test
+# description: ducklake_backfill_row_id_stats adds row id stats to data files written before they were collected
+# group: [rowid]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_backfill_row_id_stats_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE MACRO row_id_stats() AS TABLE
+SELECT data_file_id, table_id, min_value::BIGINT AS min_rowid, max_value::BIGINT AS max_rowid, value_count, null_count,
+       column_size_bytes > 0 AS embedded
+FROM ducklake_meta.ducklake_file_column_stats
+WHERE column_id = 2147483540
+
+# plain inserts: derived ranges
+statement ok
+CREATE TABLE ducklake.plain(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.plain SELECT i FROM range(100) t(i)
+
+statement ok
+INSERT INTO ducklake.plain SELECT i + 100 FROM range(100) t(i)
+
+# UPDATE: the new file embeds the preserved row ids
+statement ok
+CREATE TABLE ducklake.updated(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.updated SELECT i FROM range(10) t(i)
+
+statement ok
+INSERT INTO ducklake.updated SELECT i + 10 FROM range(10) t(i)
+
+statement ok
+UPDATE ducklake.updated SET i = i + 100 WHERE rowid < 3
+
+# rewrite_data_files: embedded row ids and no row_id_start
+statement ok
+CREATE TABLE ducklake.rewritten(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.rewritten SELECT i FROM range(20) t(i)
+
+statement ok
+DELETE FROM ducklake.rewritten WHERE i < 15
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'rewritten', delete_threshold => 0)
+
+# flush with a gap in the row ids: 0-4 and 105-108
+statement ok
+CREATE TABLE ducklake.flushed(i INTEGER);
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 10, table_name => 'flushed')
+
+statement ok
+INSERT INTO ducklake.flushed SELECT i FROM range(5) t(i)
+
+statement ok
+INSERT INTO ducklake.flushed SELECT i + 5 FROM range(100) t(i)
+
+statement ok
+INSERT INTO ducklake.flushed SELECT i + 105 FROM range(4) t(i)
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'flushed')
+
+# add_files: derived range
+statement ok
+COPY (SELECT i::INTEGER AS i FROM range(7) t(i)) TO '${DATA_PATH}/ducklake_backfill_added.parquet'
+
+statement ok
+CREATE TABLE ducklake.added(i INTEGER);
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'added', '${DATA_PATH}/ducklake_backfill_added.parquet')
+
+# remember the rows written at write time, then remove them to simulate files written before row id stats existed
+statement ok
+CREATE TABLE expected AS FROM row_id_stats()
+
+query I
+SELECT COUNT(*) > 0 AND COUNT(*) FILTER (WHERE embedded) > 0 AND COUNT(*) FILTER (WHERE NOT embedded) > 0 FROM expected
+----
+true
+
+statement ok
+DELETE FROM ducklake_meta.ducklake_file_column_stats WHERE column_id = 2147483540
+
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.plain WHERE rowid = 150
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+
+# dry run reports the work but writes nothing
+query IIIII
+CALL ducklake_backfill_row_id_stats('ducklake', table_name => 'plain', dry_run => true)
+----
+main	plain	0	2	0
+
+query I
+SELECT COUNT(*) FROM row_id_stats()
+----
+0
+
+# max_files limits the files handled in one call
+query IIIII
+CALL ducklake_backfill_row_id_stats('ducklake', table_name => 'plain', max_files => 1)
+----
+main	plain	0	1	0
+
+query I
+SELECT COUNT(*) FROM row_id_stats()
+----
+1
+
+# backfill the whole catalog - this includes files only visible to time travel, like the file rewritten_data_files
+# replaced
+query IIIII rowsort
+CALL ducklake_backfill_row_id_stats('ducklake')
+----
+main	added	0	1	0
+main	flushed	1	1	0
+main	plain	0	1	0
+main	rewritten	1	1	0
+main	updated	1	2	0
+
+# the backfilled rows match the rows written at write time
+query I
+SELECT COUNT(*) FROM expected e FULL OUTER JOIN row_id_stats() b USING (data_file_id)
+WHERE e.min_rowid IS DISTINCT FROM b.min_rowid OR e.max_rowid IS DISTINCT FROM b.max_rowid
+   OR e.value_count IS DISTINCT FROM b.value_count OR e.null_count IS DISTINCT FROM b.null_count
+   OR e.embedded IS DISTINCT FROM b.embedded OR e.table_id IS DISTINCT FROM b.table_id
+----
+0
+
+# pruning works again
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.plain WHERE rowid = 150
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+query I
+SELECT i FROM ducklake.flushed WHERE rowid IN (2, 50, 107) ORDER BY i
+----
+2
+50
+107
+
+# running it again finds nothing to do
+query IIIII
+CALL ducklake_backfill_row_id_stats('ducklake')
+----
+
+# merge_adjacent_files uses the backfilled rows: the UPDATE output keeps its embedded row ids
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'updated')
+
+query II
+SELECT rowid, i FROM ducklake.updated WHERE rowid IN (0, 2, 15) ORDER BY rowid
+----
+0	100
+2	102
+15	15
+
+# a file that cannot be read is skipped, the others are still backfilled
+statement ok
+CREATE TABLE ducklake.missing(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.missing SELECT i FROM range(10) t(i)
+
+statement ok
+INSERT INTO ducklake.missing SELECT i + 10 FROM range(10) t(i)
+
+statement ok
+DELETE FROM ducklake_meta.ducklake_file_column_stats WHERE column_id = 2147483540
+  AND table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'missing' AND end_snapshot IS NULL)
+
+statement ok
+UPDATE ducklake_meta.ducklake_data_file SET path = 'ducklake_backfill_does_not_exist.parquet'
+WHERE data_file_id = (
+    SELECT MIN(data_file_id) FROM ducklake_meta.ducklake_data_file
+    WHERE table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'missing' AND end_snapshot IS NULL))
+
+query IIIII
+CALL ducklake_backfill_row_id_stats('ducklake', table_name => 'missing')
+----
+main	missing	0	1	1
+
+query I
+SELECT COUNT(*) FROM row_id_stats()
+WHERE table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'missing' AND end_snapshot IS NULL)
+----
+1
+
+# an unreadable file does not break the surrounding transaction: its other changes still commit
+statement ok
+DELETE FROM ducklake_meta.ducklake_file_column_stats WHERE column_id = 2147483540
+  AND table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'missing' AND end_snapshot IS NULL)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.plain VALUES (1000)
+
+query IIIII
+CALL ducklake_backfill_row_id_stats('ducklake', table_name => 'missing')
+----
+main	missing	0	1	1
+
+statement ok
+COMMIT
+
+query I
+SELECT COUNT(*) FROM ducklake.plain WHERE i = 1000
+----
+1
+
+query I
+SELECT COUNT(*) FROM row_id_stats()
+WHERE table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'missing' AND end_snapshot IS NULL)
+----
+1
+
+# schema filter and max_files across tables
+statement ok
+CREATE SCHEMA ducklake.other
+
+statement ok
+CREATE TABLE ducklake.other.t1(i INTEGER);
+
+statement ok
+CREATE TABLE ducklake.other.t2(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.other.t1 SELECT i FROM range(5) t(i)
+
+statement ok
+INSERT INTO ducklake.other.t1 SELECT i FROM range(5) t(i)
+
+statement ok
+INSERT INTO ducklake.other.t2 SELECT i FROM range(5) t(i)
+
+statement ok
+DELETE FROM ducklake_meta.ducklake_file_column_stats WHERE column_id = 2147483540
+
+statement ok
+CALL ducklake_backfill_row_id_stats('ducklake', schema => 'other', max_files => 2)
+
+query I
+SELECT COUNT(*) FROM row_id_stats()
+----
+2
+
+statement ok
+CALL ducklake_backfill_row_id_stats('ducklake', schema => 'other')
+
+query I
+SELECT COUNT(*) FROM row_id_stats()
+----
+3
+
+query I
+SELECT COUNT(*) FROM row_id_stats()
+WHERE table_id IN (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name IN ('plain', 'updated'))
+----
+0
+
+statement error
+CALL ducklake_backfill_row_id_stats('ducklake', max_files => 0)
+----
+max_files must be greater than zero
+
+statement error
+CALL ducklake_backfill_row_id_stats('ducklake', table_name => 'does_not_exist')
+----
+does_not_exist

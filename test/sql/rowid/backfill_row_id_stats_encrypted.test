@@ -1,0 +1,41 @@
+# name: test/sql/rowid/backfill_row_id_stats_encrypted.test
+# description: ducklake_backfill_row_id_stats skips encrypted data files
+# group: [rowid]
+
+require ducklake
+
+require parquet
+
+require httpfs
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_backfill_encrypted_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0, ENCRYPTED)
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.t SELECT i FROM range(10) t(i)
+
+statement ok
+DELETE FROM ducklake_meta.ducklake_file_column_stats WHERE column_id = 2147483540
+
+query IIIII
+CALL ducklake_backfill_row_id_stats('ducklake')
+----
+main	t	0	0	1
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_file_column_stats WHERE column_id = 2147483540
+----
+0
+
+# files without a row id stats row are not pruned
+query I
+SELECT i FROM ducklake.t WHERE rowid = 5
+----
+5

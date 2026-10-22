@@ -111,6 +111,11 @@ public:
 	DuckLakeCleanupOrphanedFilesFunction();
 };
 
+class DuckLakeBackfillRowIdStatsFunction : public TableFunction {
+public:
+	DuckLakeBackfillRowIdStatsFunction();
+};
+
 class DuckLakeExpireSnapshotsFunction : public TableFunction {
 public:
 	DuckLakeExpireSnapshotsFunction();
