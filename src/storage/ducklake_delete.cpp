@@ -654,35 +654,16 @@ optional_ptr<PhysicalTableScan> FindDeleteSource(PhysicalOperator &plan) {
 }
 
 //! The query for the data files committed after the snapshot of the delete source that its static filters could
-//! match, empty if none of them can rule out a file. Dynamic filters are left out: they only hold for the rows the
-//! scan read.
+//! match, empty if none of them can rule out a file
 static string GetInsertedFileQuery(PhysicalTableScan &scan, DuckLakeTableEntry &table) {
 	if (scan.function.name != "ducklake_scan" || !scan.function.function_info) {
 		return string();
 	}
 	auto &read_info = scan.function.function_info->Cast<DuckLakeFunctionInfo>();
-	if (read_info.scan_type != DuckLakeScanType::SCAN_TABLE || read_info.table_id != table.GetTableId()) {
+	if (read_info.table_id != table.GetTableId()) {
 		return string();
 	}
-	auto &file_list = scan.bind_data->Cast<MultiFileBindData>().file_list->Cast<DuckLakeMultiFileList>();
-	auto filter_info = file_list.GetFilterInfo();
-	if (!filter_info) {
-		return string();
-	}
-	auto static_filters = filter_info->Copy();
-	for (auto it = static_filters->column_filters.begin(); it != static_filters->column_filters.end();) {
-		if (DuckLakeUtil::GetOptionalDynamicFilter(*it->second.table_filter)) {
-			it = static_filters->column_filters.erase(it);
-		} else {
-			++it;
-		}
-	}
-	if (static_filters->column_filters.empty()) {
-		return string();
-	}
-	auto transaction = read_info.GetTransaction();
-	return transaction->GetMetadataManager().GetCommittedFileMatchingFilterQuery(read_info.table, read_info.snapshot,
-	                                                                             *static_filters);
+	return scan.bind_data->Cast<MultiFileBindData>().file_list->Cast<DuckLakeMultiFileList>().GetCommittedFileQuery();
 }
 
 //! Whether the plan only filters and projects the rows of the scan. Otherwise what it deletes can depend on other

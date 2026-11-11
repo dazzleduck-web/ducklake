@@ -254,8 +254,15 @@ public:
 	//! Record what a delete statement could match: it conflicts only with the concurrently inserted files one of the
 	//! queries returns - none means with any concurrent insert into the table
 	void AddDeleteConflictQueries(TableIndex table_id, const vector<string> &inserted_file_queries);
-	//! Record that the transaction scanned a table, so its inserts conflict with concurrent deletes from it
-	void MarkTableRead(TableIndex table_id);
+	//! Record that the transaction scans a table, and return the id of the read: its inserts can then depend on
+	//! the table, and its deletes from the table conflict with the inserts this read could have seen
+	idx_t MarkTableRead(TableIndex table_id);
+	//! Record what a read can see: the query for the data files committed after its snapshot that its filters could
+	//! match, empty if any committed file could change what it read
+	void SetReadScope(idx_t read_id, const string &inserted_file_query);
+	//! Record that the transaction read catalog state through a metadata function - its inserts and deletes then
+	//! conflict with any concurrent delete or insert
+	void MarkCatalogStateRead();
 
 	void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);

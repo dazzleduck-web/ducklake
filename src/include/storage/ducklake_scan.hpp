@@ -51,6 +51,8 @@ struct DuckLakeFunctionInfo : public TableFunctionInfo {
 	DuckLakeSnapshot snapshot;
 	TableIndex table_id;
 	DuckLakeScanType scan_type = DuckLakeScanType::SCAN_TABLE;
+	//! Identifies this read of the table within its transaction, see DuckLakeTransaction::MarkTableRead
+	idx_t read_id = DConstants::INVALID_INDEX;
 	//! Start snapshot - only set for DuckLakeScanType::SCAN_INSERTIONS and DuckLakeScanType::SCAN_DELETIONS
 	unique_ptr<DuckLakeSnapshot> start_snapshot;
 
