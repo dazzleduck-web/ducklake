@@ -1665,7 +1665,11 @@ void DuckLakeTransaction::AddNewInlinedFileDeletes(TableIndex table_id, idx_t fi
 	state->local_changes.AddNewInlinedFileDeletes(table_id, file_id, std::move(new_deletes));
 }
 
-void DuckLakeTransaction::AddDeletes(TableIndex table_id, vector<DuckLakeDeleteFile> files) {
+void DuckLakeTransaction::AddDeletes(TableIndex table_id, vector<DuckLakeDeleteFile> files, bool scoped_delete) {
+	if (!scoped_delete) {
+		lock_guard<mutex> guard(conflict_scope_lock);
+		state->tables_deleted_table_wide.insert(table_id);
+	}
 	auto context_ref = context.lock();
 	state->local_changes.AddDeletes(*context_ref, table_id, std::move(files));
 }
@@ -1791,9 +1795,40 @@ void DuckLakeTransaction::DropTableMacro(DuckLakeTableMacroEntry &macro) {
 	state->dropped_table_macros.insert(macro.GetIndex());
 }
 
-void DuckLakeTransaction::DropFile(TableIndex table_id, DataFileIndex data_file_id, string path) {
+void DuckLakeTransaction::DropFile(TableIndex table_id, DataFileIndex data_file_id, string path, bool scoped_delete) {
 	state->tables_deleted_from.insert(table_id);
 	state->dropped_files.emplace(std::move(path), data_file_id);
+	if (!scoped_delete) {
+		lock_guard<mutex> guard(conflict_scope_lock);
+		state->tables_deleted_table_wide.insert(table_id);
+	}
+}
+
+void DuckLakeTransaction::AddDeleteConflictQueries(TableIndex table_id, const vector<string> &inserted_file_queries) {
+	lock_guard<mutex> guard(conflict_scope_lock);
+	if (state->tables_deleted_table_wide.find(table_id) != state->tables_deleted_table_wide.end()) {
+		return;
+	}
+	if (inserted_file_queries.empty()) {
+		state->tables_deleted_table_wide.insert(table_id);
+		return;
+	}
+	auto &queries = state->delete_conflict_queries[table_id];
+	for (auto &query : inserted_file_queries) {
+		if (std::find(queries.begin(), queries.end(), query) == queries.end()) {
+			queries.push_back(query);
+		}
+	}
+	if (queries.size() > DuckLakeTransactionState::MAX_DELETE_CONFLICT_QUERIES) {
+		// the commit runs every query - past a few, one check against any insert is cheaper
+		state->tables_deleted_table_wide.insert(table_id);
+		state->delete_conflict_queries.erase(table_id);
+	}
+}
+
+void DuckLakeTransaction::MarkTableRead(TableIndex table_id) {
+	lock_guard<mutex> guard(conflict_scope_lock);
+	state->tables_read.insert(table_id);
 }
 
 bool DuckLakeTransaction::HasDroppedFiles() const {

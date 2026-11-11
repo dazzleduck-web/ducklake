@@ -118,6 +118,12 @@ public:
 	                       DuckLakeSnapshot transaction_snapshot,
 	                       const std::function<unique_ptr<QueryResult>(string)> &executor) const;
 
+	//! Whether an insert of this transaction into the table can depend on what the transaction read from it
+	bool InsertMayDependOnReads(TableIndex table_id) const;
+	//! Fails when a concurrent insert into the table added rows that a delete of this transaction could have matched
+	void CheckDeleteAgainstInserts(TableIndex table_id, const SnapshotChangeInformation &other_changes,
+	                               const std::function<unique_ptr<QueryResult>(string)> &executor) const;
+
 	static SnapshotDeletedFromFiles
 	GetFilesDeletedOrDroppedAfterSnapshot(const std::function<unique_ptr<QueryResult>(string)> &executor);
 	//! Returns the subset of file_ids that no longer exists in ducklake_data_file (e.g. retired by a merge)
@@ -197,6 +203,16 @@ public:
 	set<TableIndex> dropped_views;
 	unordered_map<string, DataFileIndex> dropped_files;
 	set<TableIndex> tables_deleted_from;
+	//! Per table, one query per delete statement for the data files committed after the snapshot of its scan that the
+	//! filters of the statement could match. A table without an entry, or with an empty one, conflicts with any
+	//! concurrent insert into the table.
+	map<TableIndex, vector<string>> delete_conflict_queries;
+	//! Past this many distinct queries for a table its deletes conflict with any concurrent insert into it
+	static constexpr idx_t MAX_DELETE_CONFLICT_QUERIES = 32;
+	//! The tables a delete without filters that can rule out a file deleted from
+	set<TableIndex> tables_deleted_table_wide;
+	//! The tables this transaction scanned - an insert conflicts with a concurrent delete only if it read the table
+	set<TableIndex> tables_read;
 	unique_ptr<DuckLakeCatalogSet> new_schemas;
 	map<SchemaIndex, reference<DuckLakeSchemaEntry>> dropped_schemas;
 	LocalTableChanges local_changes;

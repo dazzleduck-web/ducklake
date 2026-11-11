@@ -221,7 +221,9 @@ public:
 	bool HasTransactionLocalInserts(TableIndex table_id) const;
 	bool HasTransactionInlinedData(TableIndex table_id) const;
 	void AppendFiles(TableIndex table_id, vector<DuckLakeDataFile> files);
-	void AddDeletes(TableIndex table_id, vector<DuckLakeDeleteFile> files);
+	//! scoped_delete: the delete operator reports what the deletes could match with AddDeleteConflictQueries - any
+	//! other delete conflicts with every concurrent insert into the table
+	void AddDeletes(TableIndex table_id, vector<DuckLakeDeleteFile> files, bool scoped_delete = false);
 	void AddCompaction(TableIndex table_id, DuckLakeCompactionEntry entry);
 
 	MappingIndex AddNameMap(unique_ptr<DuckLakeNameMap> name_map);
@@ -247,7 +249,13 @@ public:
 	void DropView(DuckLakeViewEntry &view);
 	void DropScalarMacro(DuckLakeScalarMacroEntry &macro);
 	void DropTableMacro(DuckLakeTableMacroEntry &macro);
-	void DropFile(TableIndex table_id, DataFileIndex data_file_id, string path);
+	//! scoped_delete: as for AddDeletes
+	void DropFile(TableIndex table_id, DataFileIndex data_file_id, string path, bool scoped_delete = false);
+	//! Record what a delete statement could match: it conflicts only with the concurrently inserted files one of the
+	//! queries returns - none means with any concurrent insert into the table
+	void AddDeleteConflictQueries(TableIndex table_id, const vector<string> &inserted_file_queries);
+	//! Record that the transaction scanned a table, so its inserts conflict with concurrent deletes from it
+	void MarkTableRead(TableIndex table_id);
 
 	void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
@@ -349,6 +357,8 @@ private:
 	//! The snapshot of the transaction (latest snapshot in DuckLake)
 	mutex snapshot_lock;
 	unique_ptr<DuckLakeSnapshot> snapshot;
+	//! Guards the delete conflict scopes and the read tables of the state
+	mutex conflict_scope_lock;
 	idx_t local_catalog_id;
 	//! Set when this transaction inlines into a table that does not yet have an inlined-data table
 	atomic<bool> requires_new_inlined_table {false};

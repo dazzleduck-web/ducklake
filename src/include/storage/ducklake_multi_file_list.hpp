@@ -54,6 +54,9 @@ public:
 	optional_ptr<const FilterPushdownInfo> GetFilterInfo() const {
 		return filter_info.get();
 	}
+	DuckLakeFunctionInfo &GetReadInfo() const {
+		return read_info;
+	}
 
 	bool IsDeleteScan() const;
 	const DuckLakeDeleteScanEntry &GetDeleteScanEntry(idx_t file_idx);

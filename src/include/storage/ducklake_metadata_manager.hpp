@@ -199,6 +199,10 @@ public:
 	virtual vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot, TableIndex table_id);
 	virtual vector<DuckLakeFileListEntry> GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
 	                                                       const FilterPushdownInfo *filter_info = nullptr);
+	//! A query for a data file of the table committed after the snapshot whose statistics do not rule out a row
+	//! matching the filter, which returns no rows if there is none. Empty if the filter cannot rule out any file.
+	string GetCommittedFileMatchingFilterQuery(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
+	                                           const FilterPushdownInfo &filter_info);
 	virtual vector<DuckLakeFileListEntry> GetTableInsertions(DuckLakeTableEntry &table, DuckLakeSnapshot start_snapshot,
 	                                                         DuckLakeSnapshot snapshot);
 	virtual vector<DuckLakeDeleteScanEntry>
