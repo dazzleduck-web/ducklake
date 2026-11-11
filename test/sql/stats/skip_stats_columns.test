@@ -46,7 +46,7 @@ INSERT INTO ducklake.t VALUES (2, 'zzz', 2.5), (3, NULL, 'nan')
 # both skipped columns lose their bounds; counts, sizes and contains_nan survive
 query IIIIIII
 SELECT column_id, min_value, max_value, value_count, null_count, column_size_bytes > 0, contains_nan
-FROM ducklake_meta.ducklake_file_column_stats WHERE data_file_id=1 ORDER BY column_id
+FROM ducklake_meta.ducklake_file_column_stats WHERE column_id <> 2147483540 AND data_file_id=1 ORDER BY column_id
 ----
 1	2	3	2	0	true	NULL
 2	NULL	NULL	1	1	true	NULL

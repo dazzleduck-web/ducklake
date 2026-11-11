@@ -27,7 +27,7 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/v11_
 
 # stats rows that existed before the migration have NULL exactness flags
 query IIII
-SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_file_column_stats ORDER BY column_id
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_file_column_stats WHERE column_id <> 2147483540 ORDER BY column_id
 ----
 1	2	NULL	NULL
 hello	world	NULL	NULL
@@ -43,7 +43,7 @@ statement ok
 INSERT INTO ducklake.test VALUES (3, 'apple'), (4, 'zebra');
 
 query IIII
-SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_file_column_stats ORDER BY data_file_id, column_id
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_file_column_stats WHERE column_id <> 2147483540 ORDER BY data_file_id, column_id
 ----
 1	2	NULL	NULL
 hello	world	NULL	NULL
@@ -80,7 +80,7 @@ query IIII
 SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN
 FROM dl.ducklake_file_column_stats stats
 JOIN dl.ducklake_data_file f USING (data_file_id)
-WHERE f.end_snapshot IS NULL
+WHERE stats.column_id <> 2147483540 AND f.end_snapshot IS NULL
 ORDER BY column_id
 ----
 0	5	true	true

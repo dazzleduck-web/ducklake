@@ -67,7 +67,7 @@ SELECT t FROM dl.skipped
 
 query II
 SELECT count(*), count(min_value) FROM __ducklake_metadata_dl.ducklake_file_column_stats
-WHERE table_id = (SELECT table_id FROM __ducklake_metadata_dl.ducklake_table WHERE table_name = 'skipped')
+WHERE column_id <> 2147483540 AND table_id = (SELECT table_id FROM __ducklake_metadata_dl.ducklake_table WHERE table_name = 'skipped')
 ----
 1	0
 

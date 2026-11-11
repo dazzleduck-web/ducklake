@@ -56,6 +56,7 @@ query III
 SELECT t.table_name, f.column_id, f.min_value IS NULL
 FROM ducklake_meta.ducklake_file_column_stats f JOIN ducklake_meta.ducklake_data_file d USING (data_file_id)
 JOIN ducklake_meta.ducklake_table t ON t.table_id=d.table_id AND t.end_snapshot IS NULL
+WHERE f.column_id <> 2147483540
 ORDER BY t.table_name, f.column_id
 ----
 nested	1	false

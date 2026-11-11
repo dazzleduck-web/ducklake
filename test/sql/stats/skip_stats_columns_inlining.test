@@ -48,6 +48,6 @@ CALL ducklake_flush_inlined_data('ducklake')
 
 query II
 SELECT count(*) FILTER (min_value IS NULL), count(*) FILTER (min_value IS NOT NULL)
-FROM ducklake_meta.ducklake_file_column_stats
+FROM ducklake_meta.ducklake_file_column_stats WHERE column_id <> 2147483540
 ----
 3	1

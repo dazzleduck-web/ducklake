@@ -137,7 +137,7 @@ SELECT (SELECT count(*) FROM config_lake.ts WHERE t = TIMESTAMP '2020-01-01 12:3
 
 query II
 SELECT tbl.table_name, stats.min_value FROM config_meta.ducklake_file_column_stats stats
-JOIN config_meta.ducklake_table tbl USING (table_id) ORDER BY tbl.table_name
+JOIN config_meta.ducklake_table tbl USING (table_id) WHERE stats.column_id <> 2147483540 ORDER BY tbl.table_name
 ----
 r	NULL
 ts	NULL

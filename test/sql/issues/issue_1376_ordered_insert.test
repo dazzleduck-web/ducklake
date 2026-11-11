@@ -36,7 +36,7 @@ statement ok
 CREATE TEMP TABLE ranges AS
 SELECT s.data_file_id AS f, s.min_value::BIGINT AS mn, s.max_value::BIGINT AS mx
 FROM meta.ducklake_file_column_stats s JOIN meta.ducklake_data_file d USING (data_file_id)
-WHERE d.table_id = 1
+WHERE d.table_id = 1 AND s.column_id <> 2147483540
 
 query I
 SELECT count(*) > 1 FROM ranges

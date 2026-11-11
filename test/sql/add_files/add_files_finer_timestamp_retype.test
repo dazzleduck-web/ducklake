@@ -162,6 +162,7 @@ query III
 SELECT tbl.table_name, stats.min_value, stats.max_value
 FROM __ducklake_metadata_ducklake.ducklake_file_column_stats stats
 JOIN __ducklake_metadata_ducklake.ducklake_table tbl USING (table_id)
+WHERE stats.column_id <> 2147483540
 ORDER BY tbl.table_id, stats.min_value NULLS FIRST
 ----
 ts	NULL	NULL

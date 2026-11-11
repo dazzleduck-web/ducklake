@@ -141,7 +141,7 @@ SELECT count(*) FROM ducklake.ms_max
 
 # the bounds are stored as values of the table type
 query III
-SELECT table_id, min_value, max_value FROM __ducklake_metadata_ducklake.ducklake_file_column_stats ORDER BY table_id
+SELECT table_id, min_value, max_value FROM __ducklake_metadata_ducklake.ducklake_file_column_stats WHERE column_id <> 2147483540 ORDER BY table_id
 ----
 1	2020-01-01 12:34:56.123457	2021-01-01 00:00:00
 2	2020-01-01 12:34:56.123457+00	2021-01-01 00:00:00+00
