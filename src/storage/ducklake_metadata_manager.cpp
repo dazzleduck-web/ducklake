@@ -1584,6 +1584,33 @@ string DuckLakeMetadataManager::BuildBucketPartitionPruningClause(DuckLakeTableE
 	return result;
 }
 
+string DuckLakeMetadataManager::GetCommittedFileMatchingFilterQuery(DuckLakeTableEntry &table,
+                                                                    DuckLakeSnapshot snapshot,
+                                                                    const FilterPushdownInfo &filter_info) {
+	auto table_id = table.GetTableId();
+	auto components = GenerateFilterPushdownComponents(filter_info, table_id);
+	if (components.where_clause.empty()) {
+		// the filter cannot rule out any file
+		return string();
+	}
+	auto where_clause = components.where_clause;
+	if (table.GetPartitionData()) {
+		auto bucket_clause = BuildBucketPartitionPruningClause(table, filter_info);
+		if (!bucket_clause.empty()) {
+			where_clause += " AND " + bucket_clause;
+		}
+	}
+	// any data file committed after the snapshot, also one that a later commit already ended
+	return components.cte_section + StringUtil::Format(R"(
+SELECT data.data_file_id
+FROM {METADATA_CATALOG}.ducklake_data_file data
+WHERE data.table_id=%d AND (data.begin_snapshot > %d OR data.partial_max > %d)
+AND %s
+LIMIT 1)",
+	                                                   table_id.index, snapshot.snapshot_id, snapshot.snapshot_id,
+	                                                   where_clause);
+}
+
 vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table,
                                                                         DuckLakeSnapshot snapshot,
                                                                         const FilterPushdownInfo *filter_info) {

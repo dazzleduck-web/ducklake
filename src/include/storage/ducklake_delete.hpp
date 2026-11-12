@@ -147,6 +147,10 @@ public:
 	string encryption_key;
 	//! Whether or not we allow duplicate deletes
 	bool allow_duplicates;
+	//! The query for the data files committed after the snapshot of the delete source that its filters could match.
+	//! Empty when it has no filters that can rule out a file: the delete then conflicts with any concurrent insert
+	//! into the table.
+	vector<string> inserted_file_queries;
 
 public:
 	// // Source interface

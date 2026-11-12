@@ -161,6 +161,21 @@ DuckLakeMultiFileReader::DuckLakeMultiFileReader(DuckLakeFunctionInfo &read_info
 DuckLakeMultiFileReader::~DuckLakeMultiFileReader() {
 }
 
+unique_ptr<MultiFileReaderGlobalState>
+DuckLakeMultiFileReader::InitializeGlobalState(ClientContext &context, const MultiFileOptions &file_options,
+                                               const MultiFileReaderBindData &bind_data, const MultiFileList &file_list,
+                                               const vector<MultiFileColumnDefinition> &global_columns,
+                                               const vector<ColumnIndex> &global_column_ids) {
+	// what a concurrent insert could change about this read, for the conflict check of the transaction's deletes
+	auto &ducklake_file_list = file_list.Cast<DuckLakeMultiFileList>();
+	auto &read_info = ducklake_file_list.GetReadInfo();
+	if (read_info.read_id != DConstants::INVALID_INDEX) {
+		read_info.GetTransaction()->SetReadScope(read_info.read_id, ducklake_file_list.GetCommittedFileQuery());
+	}
+	return MultiFileReader::InitializeGlobalState(context, file_options, bind_data, file_list, global_columns,
+	                                              global_column_ids);
+}
+
 unique_ptr<MultiFileReader> DuckLakeMultiFileReader::Copy() const {
 	auto result = make_uniq<DuckLakeMultiFileReader>(read_info);
 	result->transaction_local_data = transaction_local_data;
