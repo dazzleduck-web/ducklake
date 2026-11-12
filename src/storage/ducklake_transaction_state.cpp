@@ -160,13 +160,14 @@ bool DuckLakeTransactionState::InsertMayDependOnReads(TableIndex table_id,
 	// a blind append cannot be changed by a delete that committed first: the serial order is the delete, then
 	// the insert. That order only holds if nothing the transaction read was changed since its snapshot - neither the
 	// table, nor any other table it read.
-	return reads_catalog_state || table_reads.find(table_id) != table_reads.end() ||
+	return !tracks_table_reads || reads_catalog_state || table_reads.find(table_id) != table_reads.end() ||
 	       ReadTableChangedByOthers(other_changes, table_id);
 }
 
 bool DuckLakeTransactionState::GetInsertedFileQueries(TableIndex table_id, vector<string> &queries) const {
 	auto delete_queries = delete_conflict_queries.find(table_id);
-	if (reads_catalog_state || tables_deleted_table_wide.find(table_id) != tables_deleted_table_wide.end() ||
+	if (!tracks_table_reads || reads_catalog_state ||
+	    tables_deleted_table_wide.find(table_id) != tables_deleted_table_wide.end() ||
 	    delete_queries == delete_conflict_queries.end() || delete_queries->second.empty()) {
 		return false;
 	}

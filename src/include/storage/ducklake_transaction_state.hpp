@@ -216,7 +216,10 @@ public:
 	static constexpr idx_t MAX_DELETE_CONFLICT_QUERIES = 32;
 	//! The tables a delete without filters that can rule out a file deleted from
 	set<TableIndex> tables_deleted_table_wide;
-	//! The tables this transaction scanned - an insert conflicts with a concurrent delete only if it read the table
+	//! Whether table_reads lists every scan of this transaction. Without it an insert conflicts with any concurrent
+	//! delete from the table, and a delete with any concurrent insert, as on the server-side commit path, which does
+	//! not stage them.
+	bool tracks_table_reads = false;
 	//! The reads of each table this transaction scanned, by read id
 	map<TableIndex, set<idx_t>> table_reads;
 	//! Per read id, the query for the data files committed after the snapshot of the read that its filters could

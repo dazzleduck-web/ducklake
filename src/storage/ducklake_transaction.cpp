@@ -702,6 +702,8 @@ DuckLakeTransaction::DuckLakeTransaction(DuckLakeCatalog &ducklake_catalog, Tran
 	schema_pins = make_uniq<DuckLakeSchemaPinState>();
 	state = make_uniq<DuckLakeTransactionState>(db, ducklake_catalog.IsCommitInfoRequired(), new_name_maps,
 	                                            ducklake_catalog.DataPath(), ducklake_catalog.Separator());
+	// every scan of a table is created by DuckLakeFunctionInfo::Create, which calls MarkTableRead
+	state->tracks_table_reads = true;
 }
 
 DuckLakeTransaction::~DuckLakeTransaction() {
