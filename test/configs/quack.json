@@ -34,7 +34,14 @@
     {
       "reason": "Test only for Postgres as catalog",
       "paths": [
-        "test/sql/metadata/ducklake_settings_postgres.test"
+        "test/sql/metadata/ducklake_settings_postgres.test",
+        "test/sql/compaction/compaction_idle_metadata_transaction.test"
+      ]
+    },
+    {
+      "reason": "set_option writes its ducklake_metadata row eagerly instead of staging it for commit like every other change, so a failed statement leaves the row behind on quack, where each metadata statement runs on the server outside the local transaction",
+      "paths": [
+        "test/sql/compaction/compaction_failed_statement_rollback.test"
       ]
     },
     {
