@@ -193,6 +193,8 @@ public:
 	//! Execute SQL on the metadata connection without placeholder substitution or metadata-manager wrapping.
 	unique_ptr<QueryResult> ExecuteRaw(string query);
 	Connection &GetConnection();
+	//! Releases the metadata transaction until the next metadata access
+	void ReleaseMetadataTransaction();
 
 	DuckLakeSnapshot GetSnapshot();
 	DuckLakeSnapshot GetSnapshot(optional_ptr<BoundAtClause> at_clause,
@@ -339,6 +341,7 @@ public:
 
 private:
 	void FlushChanges();
+	void BeginMetadataTransaction();
 	static DuckLakePartitionInfo GetNewPartitionKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	static DuckLakeSortInfo GetNewSortKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	static DuckLakeTableInfo GetNewTable(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
@@ -360,6 +363,7 @@ private:
 	DatabaseInstance &db;
 	unique_ptr<DuckLakeMetadataManager> metadata_manager;
 	mutex connection_lock;
+	bool metadata_transaction_released = false;
 	unique_ptr<Connection> connection;
 	//! The snapshot of the transaction (latest snapshot in DuckLake)
 	mutex snapshot_lock;

@@ -746,6 +746,10 @@ void DuckLakeTransaction::Start() {
 }
 
 void DuckLakeTransaction::Commit() {
+	if (connection) {
+		// re-open the metadata transaction if a compaction released it (see ReleaseMetadataTransaction)
+		GetConnection();
+	}
 	if (ChangesMade()) {
 		FlushChanges();
 	} else if (connection) {
@@ -763,7 +767,9 @@ void DuckLakeTransaction::Commit() {
 void DuckLakeTransaction::Rollback() {
 	if (connection) {
 		// rollback any changes made to the metadata catalog
-		connection->Rollback();
+		if (connection->HasActiveTransaction()) {
+			connection->Rollback();
+		}
 		connection.reset();
 	}
 	state->CleanupFiles();
@@ -789,9 +795,24 @@ Connection &DuckLakeTransaction::GetConnection() {
 		// set max error reporting to 0 so that during error reporting we don't traverse other schemas / catalogs
 		auto &client_config = ClientConfig::GetConfig(*connection->context);
 		client_config.user_settings.SetUserSetting(CatalogErrorMaxSchemasSetting::SettingIndex, Value::UBIGINT(0));
-		connection->BeginTransaction();
+		BeginMetadataTransaction();
+	} else if (metadata_transaction_released) {
+		BeginMetadataTransaction();
 	}
 	return *connection;
+}
+
+void DuckLakeTransaction::BeginMetadataTransaction() {
+	connection->BeginTransaction();
+	metadata_transaction_released = false;
+}
+
+void DuckLakeTransaction::ReleaseMetadataTransaction() {
+	lock_guard<mutex> lock(connection_lock);
+	if (connection && connection->HasActiveTransaction()) {
+		connection->Commit();
+		metadata_transaction_released = true;
+	}
 }
 
 case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> &DuckLakeTransaction::GetNewMacroMap(CatalogType type) {
