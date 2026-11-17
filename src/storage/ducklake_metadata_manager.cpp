@@ -2132,6 +2132,7 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 	string delete_file_filter;
 	string file_filter_clause = " AND data.end_snapshot IS NULL";
 	auto partition_value_filter = StringUtil::Format("\n\tWHERE table_id=%d", table_id.index);
+	string row_id_stats_filter;
 
 	map<idx_t, set<idx_t>> inlined_deletions;
 
@@ -2142,6 +2143,69 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 			    StringUtil::Format(" AND data.file_size_bytes >= %llu", options.min_file_size.GetIndex());
 		}
 		file_filter_clause += StringUtil::Format(" AND data.file_size_bytes < %llu", effective_max_file_size);
+		if (options.max_files.IsValid()) {
+			// List only the files the planner below can use. It groups candidates by (schema version, partition),
+			// fills each output up to target_file_size in snapshot order, and stops after max_files outputs, so
+			// a call with a cap needs at most the files of max_files such chunks - not the table's whole backlog,
+			// whose file list (paths, partition values) otherwise has to fit in memory for every call.
+			// Chunks are numbered by the bytes before each file within its group, kept only with at least two
+			// files (a single file is not merged), and the oldest chunks across groups are taken first, which
+			// also stops a busy partition from starving older backlog. Twice the cap leaves room for chunk
+			// boundaries that differ from the planner's.
+			idx_t target = MaxValue<idx_t>(options.target_file_size, 1);
+			idx_t max_chunks = options.max_files.GetIndex() * 2;
+			candidate_files_cte = StringUtil::Format(
+			    R"(
+				candidate_versions AS (
+					SELECT begin_snapshot, schema_version,
+					       COALESCE(LEAD(begin_snapshot) OVER (ORDER BY begin_snapshot), 9223372036854775807) AS end_snapshot
+					FROM {METADATA_CATALOG}.ducklake_schema_versions
+					WHERE table_id=%d
+				),
+				candidate_keys AS (
+					SELECT data_file_id, STRING_AGG(COALESCE(partition_value, chr(1)), chr(31) ORDER BY partition_key_index) AS pkey
+					FROM {METADATA_CATALOG}.ducklake_file_partition_value
+					WHERE table_id=%d
+					GROUP BY data_file_id
+				),
+				candidate_sized AS (
+					SELECT data.data_file_id, data.begin_snapshot,
+					       SUM(data.file_size_bytes) OVER grp - data.file_size_bytes AS bytes_before,
+					       sv.schema_version, data.partition_id, COALESCE(k.pkey, '') AS pkey
+					FROM {METADATA_CATALOG}.ducklake_data_file data
+					LEFT JOIN candidate_versions sv
+					  ON data.begin_snapshot >= sv.begin_snapshot AND data.begin_snapshot < sv.end_snapshot
+					LEFT JOIN candidate_keys k USING (data_file_id)
+					WHERE data.table_id=%d%s AND data.file_size_bytes < %llu
+					  AND NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_delete_file x
+					                  WHERE x.table_id=%d AND x.end_snapshot IS NULL AND x.data_file_id = data.data_file_id)
+					WINDOW grp AS (PARTITION BY sv.schema_version, data.partition_id, k.pkey
+					               ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id
+					               ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+				),
+				candidate_chunks AS (
+					SELECT schema_version, partition_id, pkey, bytes_before // %llu AS chunk, MIN(begin_snapshot) AS oldest
+					FROM candidate_sized
+					GROUP BY ALL
+					HAVING COUNT(*) >= 2
+					ORDER BY oldest
+					LIMIT %llu
+				),
+				candidate_files AS (
+					SELECT s.data_file_id
+					FROM candidate_sized s
+					JOIN candidate_chunks c
+					  ON s.schema_version IS NOT DISTINCT FROM c.schema_version AND s.partition_id IS NOT DISTINCT FROM c.partition_id
+					 AND s.pkey = c.pkey AND s.bytes_before // %llu = c.chunk
+				),
+			)",
+			    table_id.index, table_id.index, table_id.index, file_filter_clause, target, table_id.index, target,
+			    max_chunks, target);
+			data_file_source = R"(candidate_files
+JOIN {METADATA_CATALOG}.ducklake_data_file data USING (data_file_id))";
+			partition_value_filter = "\n\tWHERE data_file_id IN (SELECT data_file_id FROM candidate_files)";
+			row_id_stats_filter = " AND data_file_id IN (SELECT data_file_id FROM candidate_files)";
+		}
 	} else if (type == CompactionType::REWRITE_DELETES) {
 		// Only files with a live delete file, or with inlined file deletions, can be rewritten. The delete
 		// threshold is applied in C++ below, so that metadata-only inlined deletions count.
@@ -2205,7 +2269,7 @@ LEFT JOIN (
 LEFT JOIN (
    SELECT data_file_id, MAX(column_size_bytes) AS column_size_bytes
    FROM {METADATA_CATALOG}.ducklake_file_column_stats
-   WHERE table_id=%d AND column_id=%d
+   WHERE table_id=%d AND column_id=%d%s
    GROUP BY data_file_id
 ) row_id_stats USING (data_file_id)
 WHERE data.table_id=%d %s
@@ -2213,7 +2277,7 @@ ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_sn
 		)",
 	                                candidate_files_cte, table_id.index, select_list, data_file_source,
 	                                table_id.index, delete_file_filter, partition_value_filter, table_id.index,
-	                                DUCKLAKE_ROW_ID_FIELD_INDEX, table_id.index, file_filter_clause);
+	                                DUCKLAKE_ROW_ID_FIELD_INDEX, row_id_stats_filter, table_id.index, file_filter_clause);
 	auto result = transaction.Query(query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get compaction file list from DuckLake: ");

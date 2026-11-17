@@ -283,6 +283,9 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 	filter_options.min_file_size = options.min_file_size;
 	filter_options.max_file_size = options.max_file_size;
 	filter_options.target_file_size = target_file_size;
+	if (type == CompactionType::MERGE_ADJACENT_TABLES && options.max_files < NumericLimits<uint64_t>::Maximum() - 1) {
+		filter_options.max_files = options.max_files;
+	}
 	// FIXME: pass in the sort_data so that list of files is approximately sorted in the same way
 	// (sorted by the min/max metadata)
 	auto files = metadata_manager.GetFilesForCompaction(table, type, delete_threshold, snapshot, filter_options);

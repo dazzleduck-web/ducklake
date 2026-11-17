@@ -522,6 +522,9 @@ struct DuckLakeFileSizeOptions {
 	optional_idx min_file_size;
 	optional_idx max_file_size;
 	idx_t target_file_size;
+	//! MERGE_ADJACENT_TABLES only: the most output files (merge groups) the call may produce. When set, only the
+	//! files of the oldest groups that can fill that many outputs are listed, instead of every candidate file.
+	optional_idx max_files;
 };
 
 struct DuckLakeTableSizeInfo {
