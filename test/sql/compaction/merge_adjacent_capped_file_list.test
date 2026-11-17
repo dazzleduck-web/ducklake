@@ -1,0 +1,151 @@
+# name: test/sql/compaction/merge_adjacent_capped_file_list.test
+# description: A merge_adjacent_files call with max_compacted_files lists only the files of the oldest groups it can fill, and merges the same as uncapped calls
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/merge_adjacent_capped_file_list/', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE ducklake;
+
+statement ok
+CALL ducklake.set_option('target_file_size', '2KB');
+
+# two identical partitioned tables of 40 small files, with a schema change half way
+statement ok
+CREATE TABLE capped (p INTEGER, v INTEGER);
+
+statement ok
+CREATE TABLE uncapped (p INTEGER, v INTEGER);
+
+statement ok
+ALTER TABLE capped SET PARTITIONED BY (p);
+
+statement ok
+ALTER TABLE uncapped SET PARTITIONED BY (p);
+
+loop i 0 10
+
+statement ok
+INSERT INTO capped VALUES (1, ${i}), (2, ${i});
+
+statement ok
+INSERT INTO uncapped VALUES (1, ${i}), (2, ${i});
+
+endloop
+
+statement ok
+ALTER TABLE capped ADD COLUMN w INTEGER;
+
+statement ok
+ALTER TABLE uncapped ADD COLUMN w INTEGER;
+
+loop i 10 20
+
+statement ok
+INSERT INTO capped VALUES (1, ${i}, ${i}), (2, ${i}, ${i});
+
+statement ok
+INSERT INTO uncapped VALUES (1, ${i}, ${i}), (2, ${i}, ${i});
+
+endloop
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+# one capped call merges at most one group
+query I
+SELECT count(*) <= 1 FROM ducklake_merge_adjacent_files('ducklake', 'capped', max_compacted_files => 1)
+----
+true
+
+statement ok
+CALL disable_logging()
+
+# the capped call chose its candidate files first; calls without a cap do not
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%candidate_chunks%'
+----
+true
+
+# capped calls until nothing is left to merge end where uncapped ones do
+loop i 0 40
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'capped', max_compacted_files => 1)
+
+endloop
+
+loop i 0 5
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'uncapped')
+
+endloop
+
+query II
+SELECT (SELECT count(*) FROM ducklake_list_files('ducklake', 'capped')) = (SELECT count(*) FROM ducklake_list_files('ducklake', 'uncapped')),
+       (SELECT count(*) FROM ducklake_list_files('ducklake', 'capped')) < 40
+----
+true	true
+
+query I
+SELECT (SELECT list(row(p, v, w) ORDER BY p, v) FROM capped) = (SELECT list(row(p, v, w) ORDER BY p, v) FROM uncapped)
+----
+true
+
+# files with inlined deletions are not chosen: the planner skips them, so if the oldest chunks held only
+# such files, every capped call would choose them, merge nothing, and never reach the newer files
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/merge_adjacent_capped_file_list/', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+USE ducklake;
+
+# about two files of ~280 bytes per chunk
+statement ok
+CALL ducklake.set_option('target_file_size', '600B');
+
+statement ok
+CREATE TABLE deleted (v INTEGER);
+
+loop i 0 10
+
+statement ok
+INSERT INTO deleted SELECT ${i} * 100 + range FROM range(20);
+
+endloop
+
+# one row of each of the five oldest files: deletions this small are inlined in the catalog
+statement ok
+DELETE FROM deleted WHERE v IN (0, 100, 200, 300, 400);
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 'deleted') WHERE delete_file IS NOT NULL
+----
+0
+
+# the oldest two chunks (twice the cap) hold only those five files; the call merges newer ones instead
+query I
+SELECT sum(files_processed) >= 2 FROM ducklake_merge_adjacent_files('ducklake', 'deleted', max_compacted_files => 1)
+----
+true
+
+query I
+SELECT count(*) FROM deleted
+----
+195

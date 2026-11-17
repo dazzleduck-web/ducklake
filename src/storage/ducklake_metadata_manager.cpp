@@ -2154,6 +2154,17 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 			// boundaries that differ from the planner's.
 			idx_t target = MaxValue<idx_t>(options.target_file_size, 1);
 			idx_t max_chunks = options.max_files.GetIndex() * 2;
+			// The planner skips files with inlined deletions as it skips those with a delete file, so they are
+			// left out here too: otherwise old files with a few inlined deletions (kept until a rewrite) would
+			// fill the oldest chunks of every call, and the rest of the table would never be merged.
+			string inlined_deletions_filter;
+			auto inlined_deletion_table = GetInlinedDeletionTableName(table_id, snapshot);
+			if (!inlined_deletion_table.empty()) {
+				inlined_deletions_filter = StringUtil::Format(
+				    "\n\t\t\t\t\t  AND data.data_file_id NOT IN (SELECT file_id FROM {METADATA_CATALOG}.%s"
+				    " WHERE file_id IS NOT NULL AND begin_snapshot <= %llu)",
+				    inlined_deletion_table, snapshot.snapshot_id);
+			}
 			candidate_files_cte = StringUtil::Format(
 			    R"(
 				candidate_versions AS (
@@ -2178,7 +2189,7 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 					LEFT JOIN candidate_keys k USING (data_file_id)
 					WHERE data.table_id=%d%s AND data.file_size_bytes < %llu
 					  AND NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_delete_file x
-					                  WHERE x.table_id=%d AND x.end_snapshot IS NULL AND x.data_file_id = data.data_file_id)
+					                  WHERE x.table_id=%d AND x.end_snapshot IS NULL AND x.data_file_id = data.data_file_id)%s
 					WINDOW grp AS (PARTITION BY sv.schema_version, data.partition_id, k.pkey
 					               ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id
 					               ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
@@ -2199,8 +2210,8 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 					 AND s.pkey = c.pkey AND s.bytes_before // %llu = c.chunk
 				),
 			)",
-			    table_id.index, table_id.index, table_id.index, file_filter_clause, target, table_id.index, target,
-			    max_chunks, target);
+			    table_id.index, table_id.index, table_id.index, file_filter_clause, target, table_id.index,
+			    inlined_deletions_filter, target, max_chunks, target);
 			data_file_source = R"(candidate_files
 JOIN {METADATA_CATALOG}.ducklake_data_file data USING (data_file_id))";
 			partition_value_filter = "\n\tWHERE data_file_id IN (SELECT data_file_id FROM candidate_files)";
